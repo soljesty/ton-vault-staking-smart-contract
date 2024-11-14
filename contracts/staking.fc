@@ -1,0 +1,233 @@
+#include "imports/stdlib.fc";
+#include "utils.fc";
+
+;;===================op codes===========================
+
+const op::staking = "op::staking"c; ;;op for staking
+const op::withdraw = "op::withdraw"c; ;;op for withdraw
+const op::admin_recycle = "op::admin_recycle"c; ;;op for withdraw
+
+;;===================error codes===========================
+
+const error::not_staked = 500;
+const error::staked = 501;
+const error::not_enough = 502;
+const error::not_admin = 503;
+const error::locking = 504;
+const error::out_range = 505;
+const error::unknown_op = 100;
+const error::sig_valid_error = 200;
+
+;;=====================constants======================
+
+const int sig_pk = 77156187364585225011841444683866677390481174983623475974518889743842888373915;
+
+;;===================global variables===========================
+global int staking_lock_timer;
+global cell staking_states;
+global cell admin_info;
+
+;;====================load storage=============================
+
+() load_data() impure {
+    var ds = get_data().begin_parse();
+    staking_lock_timer = ds~load_uint(32);
+    staking_states = ds~load_dict();
+    admin_info = ds~load_ref();
+    ds.end_parse();
+}
+
+;;====================save storage=============================
+() save_data() impure {
+    set_data(
+        begin_cell()
+            .store_uint(staking_lock_timer, 32)
+            .store_dict(staking_states)
+            .store_ref(admin_info)
+            .end_cell()
+    );
+}
+
+;;====================internal message handler=============================
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+      if (in_msg_body.slice_empty?()) { ;; ignore all empty messages
+        return ();
+    }
+
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+
+    int op = in_msg_body~load_uint(32); ;; by convention, the first 32 bits of incoming message is the op
+    int query_id = in_msg_body~load_uint(64);
+    slice sender_address = cs~load_msg_addr();
+    load_data();
+
+    if(op == op::staking){
+        int current_time = now();
+
+        ;; if(msg_value > 20000000000){
+        ;;     throw(error::out_range);
+        ;; }
+        ;;  if(msg_value < 100000000){
+        ;;     throw(error::out_range);
+        ;; }
+
+        (slice data,int f) = staking_states.udict_get?(256, slice_hash(sender_address));
+        if (f == 0) {
+            staking_states~udict_set(256, slice_hash(sender_address), begin_cell().store_coins(msg_value).store_coins(current_time + staking_lock_timer).end_cell().begin_parse());
+        } else {
+            ;; staking_states~udict_set(256, slice_hash(sender_address), begin_cell().store_coins(msg_value).store_coins(current_time + staking_lock_timer).end_cell().begin_parse());
+            throw (error::staked);
+        }
+        save_data();
+        return ();
+    }
+
+    if(op == op::withdraw){
+        int current_time = now();
+
+        (slice data, int f) = staking_states.udict_get?(256, slice_hash(sender_address));
+        if(f == 0) {
+            throw(error::not_staked);
+        }
+        int withdraw_amount = data~load_coins();
+        int unlock_time = data~load_coins();
+        throw_unless(error::locking, current_time >= unlock_time);
+
+        ;;validate signature
+        int slashed = in_msg_body~load_uint(4);
+        int data_length = in_msg_body~load_uint(32);
+        int sig_length = in_msg_body~load_uint(32);
+ 
+        var data_cell = in_msg_body~load_ref();
+        slice data_slice = data_cell.begin_parse();
+        slice sig_data = first_bits(data_slice,data_length);
+
+
+        var signature_cell = in_msg_body~load_ref();
+        slice signature_slice = signature_cell.begin_parse();
+        slice signature = first_bits(signature_slice,sig_length);
+
+       
+        throw_unless(error::sig_valid_error, check_data_signature(sig_data, signature, sig_pk));
+
+        
+        int bonus_amount = 0;
+        if(slashed == 0){
+            bonus_amount =  withdraw_amount / 100 * 5;
+        }
+    
+        int total_amount = withdraw_amount + bonus_amount;
+
+        ;; valid contract balance
+        var [balance, _] = get_balance();
+        throw_unless(error::not_enough, balance > total_amount);
+
+
+        staking_states~udict_set(256, slice_hash(sender_address),
+            begin_cell()
+            .store_coins(0)
+            .store_coins(current_time)
+            .end_cell().begin_parse()
+        );
+
+        send_ton(sender_address,total_amount,3);
+        save_data();
+        return ();
+    }
+
+    if(op == op::admin_recycle){
+        slice admin_slice = admin_info.begin_parse();
+        slice admin_address = admin_slice~load_msg_addr();
+        throw_unless(error::not_admin,equal_slices(admin_address,sender_address));
+
+        int recycle_amount = in_msg_body~load_coins();
+
+        var [balance, _] = get_balance();
+        if(balance <= recycle_amount){
+            throw(error::not_enough);
+        }
+
+        send_ton(sender_address,recycle_amount,3);
+        save_data();
+        return ();
+    }
+
+    throw(error::unknown_op); ;; if the message contains an op that is not known to this contract, we throw
+}
+
+;;query all contract balance
+int get_contract_balance() method_id {
+  var [balance, _] = get_balance();
+  return balance;
+}
+
+;;query single address staking states
+(tuple) get_adress_state(slice address) method_id {
+    load_data();
+    (slice data, int f) = staking_states.udict_get?(256, slice_hash(address));
+    if(f == 0) {
+        throw(error::not_staked);
+    }
+
+    int staking_amount = data~load_coins();
+    int unlock_time = data~load_coins();
+    tuple res = empty_tuple();
+    res~tpush(staking_amount);
+    res~tpush(unlock_time);
+    return res;
+}
+
+(tuple) get_staking_info() method_id {
+    load_data();
+    int key = -1;
+    tuple res = empty_tuple();
+    do {
+		(key,slice data, int f) = staking_states.udict_get_next?(256, key);
+		if (f) {
+			 int staking_amount = data~load_coins();
+             int unlock_time = data~load_coins();
+             res~tpush(key);
+             res~tpush(staking_amount);
+             res~tpush(unlock_time);
+		}
+	} until (~ f);
+    return res;
+}
+
+(tuple) get_sign_valid(slice sign_data,slice signature,int public_key) method_id {
+    tuple res = empty_tuple();
+     res~tpush(sign_data);
+      res~tpush(signature);
+       res~tpush(public_key);
+    int is_valid = check_data_signature(sign_data, signature, public_key);
+    res~tpush(is_valid);
+    return res;
+}
+
+
+(tuple) get_upload_data(slice in_msg) method_id {
+    ;; slice cs = in_msg.begin_parse();
+    int data_length = in_msg~load_uint(32);
+    int sig_length = in_msg~load_uint(32);
+
+    var ref_data = in_msg~load_ref();
+    slice rr = ref_data.begin_parse();
+    slice sign_data = rr.first_bits(240);
+
+    var sig_ref = in_msg~load_ref();
+    slice ss = sig_ref.begin_parse();
+    slice signature = ss.first_bits(512);
+    
+    tuple res = empty_tuple();
+      res~tpush(data_length);
+       res~tpush(sig_length);
+       res~tpush(sign_data);
+        res~tpush(signature);
+    int is_valid = check_data_signature(sign_data, signature, sig_pk);
+    res~tpush(is_valid);
+    return res;
+}
