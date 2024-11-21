@@ -1,8 +1,3 @@
-
-
-const const::tx_fee = 2 * 10000000;
-const const::tx_fee_send_jetton = 40000000; ;; 0.035 TON
-
 () send_ton(slice recepient, int amount, int mode) impure inline {
     var msg = begin_cell()
     .store_uint(0x10, 6)
