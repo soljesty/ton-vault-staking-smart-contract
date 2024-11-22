@@ -6,6 +6,8 @@
 const op::staking = "op::staking"c; ;;op for staking
 const op::withdraw = "op::withdraw"c; ;;op for withdraw
 const op::admin_recycle = "op::admin_recycle"c; ;;op for withdraw
+const op::add_blacklist = "ope::add_blacklist"c; ;;op for add black list
+const op::remove_blacklist = "ope::remove_blacklist"c; ;;op for add black list
 
 ;;===================error codes===========================
 
@@ -17,6 +19,7 @@ const error::locking = 504;
 const error::out_range = 505;
 const error::unknown_op = 100;
 const error::sig_valid_error = 200;
+const error::black_address = 201;
 
 ;;=====================constants======================
 
@@ -26,6 +29,7 @@ const int sig_pk = 7715618736458522501184144468386667739048117498362347597451888
 global int staking_lock_timer;
 global cell staking_states;
 global cell admin_info;
+global cell black_list;
 
 ;;====================load storage=============================
 
@@ -34,6 +38,7 @@ global cell admin_info;
     staking_lock_timer = ds~load_uint(32);
     staking_states = ds~load_dict();
     admin_info = ds~load_ref();
+    black_list = ds~load_dict();
     ds.end_parse();
 }
 
@@ -44,6 +49,7 @@ global cell admin_info;
             .store_uint(staking_lock_timer, 32)
             .store_dict(staking_states)
             .store_ref(admin_info)
+            .store_dict(black_list)
             .end_cell()
     );
 }
@@ -114,6 +120,17 @@ global cell admin_info;
        
         throw_unless(error::sig_valid_error, check_data_signature(sig_data, signature, sig_pk));
 
+        ;;check blacklist
+        int key = -1;
+        do {
+		(key,slice data, int f) = black_list.udict_get_next?(256, key);
+		if (f) {
+            if(key = slice_hash(sender_address)){
+                throw(error::black_address);
+            }
+		}
+	    } until (~ f);
+
         
         int bonus_amount = 0;
         if(slashed == 0){
@@ -152,6 +169,38 @@ global cell admin_info;
         }
 
         send_ton(sender_address,recycle_amount,3);
+        save_data();
+        return ();
+    }
+
+    if (op == op::add_blacklist){
+        slice admin_slice = admin_info.begin_parse();
+        slice admin_address = admin_slice~load_msg_addr();
+        throw_unless(error::not_admin,equal_slices(admin_address,sender_address));
+
+        var ref_data = in_msg_body~load_ref();
+        slice black_address = ref_data.begin_parse();
+
+
+        black_list~udict_set(256, slice_hash(black_address),
+            begin_cell()
+            .store_coins(1)
+            .end_cell().begin_parse()
+        );
+
+        save_data();
+        return ();
+    }
+
+     if (op == op::remove_blacklist){
+        slice admin_slice = admin_info.begin_parse();
+        slice admin_address = admin_slice~load_msg_addr();
+        throw_unless(error::not_admin,equal_slices(admin_address,sender_address));
+
+        var ref_data = in_msg_body~load_ref();
+        slice black_address = ref_data.begin_parse();
+
+        black_list~udict_delete?(256, slice_hash(black_address));
         save_data();
         return ();
     }
@@ -229,5 +278,18 @@ int get_contract_balance() method_id {
         res~tpush(signature);
     int is_valid = check_data_signature(sign_data, signature, sig_pk);
     res~tpush(is_valid);
+    return res;
+}
+
+(tuple) get_black_list() method_id {
+    load_data();
+    int key = -1;
+    tuple res = empty_tuple();
+    do {
+		(key,slice data, int f) = black_list.udict_get_next?(256, key);
+		if (f) {
+             res~tpush(key);
+		}
+	} until (~ f);
     return res;
 }

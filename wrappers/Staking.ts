@@ -7,11 +7,11 @@ export type StakingConfig = {
 };
 
 export const Opcodes = {
-    staking: 0x9b18ba90, withdraw: 0xcb03bfaf, admin_recycle: 0x72e90687,
+    staking: 0x9b18ba90, withdraw: 0xcb03bfaf, admin_recycle: 0x72e90687,add_blacklist:0xe775487,del_blacklist:0xda6c22c0
 };
 
 export function stakingConfigToCell(config: StakingConfig): Cell {
-    return beginCell().storeUint(config.stakingLockTimer, 32).storeDict(null).storeRef(beginCell().storeAddress(config.stakingAdminAddress).endCell()).endCell();
+    return beginCell().storeUint(config.stakingLockTimer, 32).storeDict(null).storeRef(beginCell().storeAddress(config.stakingAdminAddress).endCell()).storeDict(null).endCell();
 }
 
 export class Staking implements Contract {
@@ -124,6 +124,46 @@ export class Staking implements Contract {
         });
     }
 
+    async sendBlackList(
+        provider: ContractProvider,
+        via: Sender,
+        opts: {
+            value: bigint;
+            queryID?: number;
+            blackAddress: Address;
+        },
+    ) {
+        await provider.internal(via, {
+            value: opts.value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: beginCell()
+                .storeUint(Opcodes.add_blacklist, 32)
+                .storeUint(opts.queryID ?? 0, 64)
+                .storeRef(beginCell().storeAddress(opts.blackAddress).endCell())
+                .endCell(),
+        });
+    }
+
+    async sendDelBlackList(
+        provider: ContractProvider,
+        via: Sender,
+        opts: {
+            value: bigint;
+            queryID?: number;
+            blackAddress: Address;
+        },
+    ) {
+        await provider.internal(via, {
+            value: opts.value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: beginCell()
+                .storeUint(Opcodes.del_blacklist, 32)
+                .storeUint(opts.queryID ?? 0, 64)
+                .storeRef(beginCell().storeAddress(opts.blackAddress).endCell())
+                .endCell(),
+        });
+    }
+
     async getStakingInfo(provider: ContractProvider) {
         const result = await provider.get('get_staking_info', []);
         const tuple = result.stack.readTuple();
@@ -148,6 +188,13 @@ export class Staking implements Contract {
             { type: 'slice', cell: data },
         ]);
         const tuple = call.stack.readTuple();
+        console.log(tuple);
+        return tuple;
+    }
+
+    async getBlackList(provider: ContractProvider) {
+        const result = await provider.get('get_black_list', []);
+        const tuple = result.stack.readTuple();
         console.log(tuple);
         return tuple;
     }
