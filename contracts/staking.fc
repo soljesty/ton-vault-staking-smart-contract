@@ -125,7 +125,7 @@ global cell black_list;
         do {
 		(key,slice data, int f) = black_list.udict_get_next?(256, key);
 		if (f) {
-            if(key = slice_hash(sender_address)){
+            if(key == slice_hash(sender_address)){
                 throw(error::black_address);
             }
 		}
