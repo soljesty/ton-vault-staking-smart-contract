@@ -1,4 +1,4 @@
-# vault_ton_contract
+# TON Vault Staking Smart Contract
 - a staking/withdraw contract about Vault
 
 ## Project structure
@@ -25,3 +25,6 @@
 ### Add a new contract
 
 `npx blueprint create ContractName` or `yarn blueprint create ContractName`
+
+## Contact
+https://t.me/soljesty
